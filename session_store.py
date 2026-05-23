@@ -27,6 +27,13 @@ def save_session(session_id: str, messages: list[dict]) -> None:
         json.dump(messages, handle, ensure_ascii=False, indent=2)
 
 
+def save_transcript(session_id: str, messages: list[dict]) -> None:
+    ensure_storage_dirs()
+    path = os.path.join(TRANSCRIPTS_DIR, f"{session_id}.json")
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(messages, handle, ensure_ascii=False, indent=2)
+
+
 def get_or_create_session(session_id: str, greeting: list[dict] | None = None) -> list[dict]:
     existing = load_session(session_id)
     if existing is not None:

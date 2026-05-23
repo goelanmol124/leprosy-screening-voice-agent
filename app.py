@@ -1,7 +1,10 @@
+import asyncio
+import logging
 import os
 import uuid
-import asyncio
 from contextlib import asynccontextmanager
+
+logger = logging.getLogger(__name__)
 
 import httpx
 from dotenv import load_dotenv
@@ -19,6 +22,7 @@ from config import (
     CLIENT_SPEECH_THRESHOLD_OFFSET,
     FALLBACK_UNHEARD_TEXT,
     GREETING_TEXT,
+    LIVEKIT_AGENT_NAME,
     STT_LANGUAGE,
     STT_MODE,
     STT_MODEL,
@@ -32,12 +36,15 @@ from config import (
 from language import detect_language_code, tts_speaker_for_language
 from llm_utils import generate_conversation_reply, generate_review_report
 from schemas import safe_parse_review
-from session_store import get_or_create_session, load_transcript, save_session
+from session_store import get_or_create_session, load_transcript, save_session, save_transcript
 
 try:
     from livekit import api
+
+    CreateAgentDispatchRequest = api.CreateAgentDispatchRequest
 except ImportError:
     api = None
+    CreateAgentDispatchRequest = None
 
 load_dotenv()
 
@@ -83,8 +90,10 @@ async def call_tts(text: str, client: httpx.AsyncClient | None = None) -> str:
                 audio_base64 = data["audios"][0]
                 tts_cache[cache_key] = audio_base64
                 return audio_base64
+        logger.warning("TTS failed: HTTP %s %s", response.status_code, response.text[:500])
         return ""
-    except Exception:
+    except Exception as exc:
+        logger.exception("TTS request error: %s", exc)
         return ""
 
 
@@ -109,7 +118,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -145,26 +154,49 @@ async def start_call():
     get_or_create_session(session_id, greeting)
 
     token_jwt = ""
+    voice_mode = "rest"
     livekit_url = os.getenv("LIVEKIT_URL", "")
     livekit_api_key = os.getenv("LIVEKIT_API_KEY", "")
     livekit_api_secret = os.getenv("LIVEKIT_API_SECRET", "")
 
-    if api and livekit_api_key and livekit_api_secret and "your-project" not in livekit_url:
+    if (
+        api
+        and CreateAgentDispatchRequest is not None
+        and livekit_api_key
+        and livekit_api_secret
+        and "your-project" not in livekit_url
+    ):
+        room_name = f"room-{session_id}"
         try:
-            room_name = f"room-{session_id}"
+            lkapi = api.LiveKitAPI(livekit_url, livekit_api_key, livekit_api_secret)
+            try:
+                await lkapi.agent_dispatch.create_dispatch(
+                    CreateAgentDispatchRequest(
+                        agent_name=LIVEKIT_AGENT_NAME,
+                        room=room_name,
+                    )
+                )
+            finally:
+                await lkapi.aclose()
+
             token = (
                 api.AccessToken(livekit_api_key, livekit_api_secret)
                 .with_identity(f"user-{uuid.uuid4().hex}")
                 .with_grants(api.VideoGrants(room_join=True, room=room_name))
             )
             token_jwt = token.to_jwt()
-            print(f"Generated LiveKit token for session {session_id} in room {room_name}")
+            voice_mode = "livekit"
+            print(
+                f"LiveKit ok: dispatched {LIVEKIT_AGENT_NAME}, token for "
+                f"session {session_id} room {room_name}"
+            )
         except Exception as exc:
-            print(f"Failed to generate LiveKit token: {exc}")
+            logger.exception("LiveKit setup failed (using REST fallback): %s", exc)
 
     return JSONResponse(
         {
             "session_id": session_id,
+            "voice_mode": voice_mode,
             "text": GREETING_TEXT,
             "audio": cached_greeting_audio,
             "livekit_token": token_jwt,
@@ -184,7 +216,7 @@ async def voice_turn(file: UploadFile = File(...), session_id: str = Form(...)):
     data = {
         "model": STT_MODEL,
         "mode": STT_MODE,
-        "language": STT_LANGUAGE,
+        "language_code": STT_LANGUAGE,
     }
 
     transcript = ""
@@ -195,7 +227,8 @@ async def voice_turn(file: UploadFile = File(...), session_id: str = Form(...)):
         )
         stt_response.raise_for_status()
         transcript = stt_response.json().get("transcript", "").strip()
-    except Exception:
+    except Exception as exc:
+        logger.exception("STT failed: %s", exc)
         transcript = ""
 
     if not transcript:
@@ -214,8 +247,10 @@ async def voice_turn(file: UploadFile = File(...), session_id: str = Form(...)):
         client = app.state.client
         ai_response = await generate_conversation_reply(client, history, API_KEY)
     except Exception as exc:
-        print(f"LLM API call failed: {exc}")
-        ai_response = "I see. Please tell me more about it so I can guide you properly."
+        logger.exception("LLM API call failed: %s", exc)
+        ai_response = (
+            "I see. Please tell me more about it so I can guide you properly."
+        )
 
     history.append({"role": "assistant", "content": ai_response})
     save_session(session_id, history)
@@ -230,18 +265,34 @@ async def voice_turn(file: UploadFile = File(...), session_id: str = Form(...)):
     )
 
 
+@app.post("/api/transcript")
+async def store_transcript(payload: dict):
+    session_id = payload.get("session_id", "")
+    messages = payload.get("messages")
+    if not session_id or not isinstance(messages, list):
+        return JSONResponse({"error": "session_id and messages required"}, status_code=400)
+
+    save_transcript(session_id, messages)
+    return JSONResponse({"ok": True})
+
+
 @app.post("/api/review")
 async def review_call(payload: dict):
     session_id = payload.get("session_id", "")
     if not session_id:
         return JSONResponse({"error": "session_id required"}, status_code=400)
 
+    voice_mode = str(payload.get("voice_mode") or "rest")
+
     history = None
-    for _ in range(TRANSCRIPT_RETRY_COUNT):
+    if voice_mode == "livekit":
+        for _ in range(TRANSCRIPT_RETRY_COUNT):
+            history = load_transcript(session_id)
+            if history:
+                break
+            await asyncio.sleep(TRANSCRIPT_RETRY_DELAY_S)
+    else:
         history = load_transcript(session_id)
-        if history:
-            break
-        await asyncio.sleep(TRANSCRIPT_RETRY_DELAY_S)
 
     if not history:
         history = get_or_create_session(session_id)
@@ -258,7 +309,7 @@ async def review_call(payload: dict):
         report_text = await generate_review_report(client, transcript_str, API_KEY)
         report = safe_parse_review(report_text, transcript_str)
     except Exception as exc:
-        print(f"Failed to generate review: {exc}")
+        logger.exception("Failed to generate review: %s", exc)
         report = safe_parse_review("", transcript_str)
 
     return JSONResponse(report.model_dump())

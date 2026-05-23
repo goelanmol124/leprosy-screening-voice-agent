@@ -5,11 +5,20 @@ from config import (
     CONVERSATION_MODEL,
     CONVERSATION_TEMPERATURE,
     CORE_BRAIN_PROMPT,
+    LLM_REASONING_EFFORT,
     REVIEW_MAX_TOKENS,
     REVIEW_MODEL,
     REVIEW_PROMPT,
     REVIEW_TEMPERATURE,
 )
+
+
+def extract_message_content(message: dict) -> str:
+    content = message.get("content")
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+
+    raise ValueError("Sarvam chat completion returned no message content")
 
 
 async def chat_completion(
@@ -31,12 +40,14 @@ async def chat_completion(
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
+        "reasoning_effort": LLM_REASONING_EFFORT,
     }
 
     response = await client.post(url, json=payload, headers=headers, timeout=50.0)
     response.raise_for_status()
     data = response.json()
-    return data["choices"][0]["message"]["content"].strip()
+    message = data["choices"][0]["message"]
+    return extract_message_content(message)
 
 
 async def generate_conversation_reply(

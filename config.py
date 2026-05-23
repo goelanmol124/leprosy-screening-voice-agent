@@ -5,9 +5,12 @@ TRANSCRIPTS_DIR = os.path.join(BASE_DIR, "transcripts")
 SESSIONS_DIR = os.path.join(BASE_DIR, "sessions")
 
 # Models (Sarvam only)
-SARVAM_MODEL = os.getenv("SARVAM_MODEL", "sarvam-30b")
+SARVAM_MODEL = os.getenv("SARVAM_MODEL", "sarvam-m")
 CONVERSATION_MODEL = SARVAM_MODEL
 REVIEW_MODEL = os.getenv("REVIEW_MODEL", SARVAM_MODEL)
+
+# LiveKit agent
+LIVEKIT_AGENT_NAME = os.getenv("LIVEKIT_AGENT_NAME", "my-agent")
 
 # STT
 STT_MODEL = "saaras:v3"
@@ -28,6 +31,8 @@ CONVERSATION_TEMPERATURE = 0.4
 CONVERSATION_MAX_TOKENS = 120
 REVIEW_TEMPERATURE = 0.1
 REVIEW_MAX_TOKENS = 512
+# Disable Sarvam thinking mode for direct spoken / JSON output.
+LLM_REASONING_EFFORT = None
 
 # LiveKit turn handling (aligned STT endpointing + VAD interruption)
 TURN_MIN_DELAY = 1.2
