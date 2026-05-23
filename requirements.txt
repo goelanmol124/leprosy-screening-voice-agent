@@ -5,4 +5,3 @@ python-dotenv
 python-multipart
 livekit-agents[sarvam,silero]
 livekit-api
-livekit-server-sdk
