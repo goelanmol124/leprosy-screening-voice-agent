@@ -149,3 +149,7 @@ Desktop.ini
 
 # Gemini / Antigravity workspace files
 .gemini/
+
+# Runtime session and transcript data
+sessions/
+transcripts/

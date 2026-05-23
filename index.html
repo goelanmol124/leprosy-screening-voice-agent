@@ -554,6 +554,26 @@
     let interruptionThreshold = 0.035;
     let interruptionFrameCount = 0;
     let speechFrameCount = 0;
+    let voiceConfig = {
+      silence_ms: 1800,
+      no_speech_timeout_ms: 10000,
+      safety_timeout_ms: 25000,
+      interruption_frames: 12,
+      speech_frames: 8,
+      speech_threshold_offset: 0.008,
+      review_delay_ms: 800,
+    };
+
+    async function loadVoiceConfig() {
+      try {
+        const res = await fetch('/api/voice-config');
+        if (res.ok) {
+          voiceConfig = await res.json();
+        }
+      } catch (err) {
+        console.warn('Using default voice config', err);
+      }
+    }
 
     // Click handler for microphone button
     micTrigger.onclick = async () => {
@@ -628,6 +648,7 @@
     // Call Start Handler
     async function startCall() {
       try {
+        await loadVoiceConfig();
         // Request Microphone Access first with echo cancellation & noise suppression
         audioStream = await navigator.mediaDevices.getUserMedia({
           audio: {
@@ -747,7 +768,7 @@
 
       // Brief delay to allow backend to finish writing LiveKit transcript file
       if (useLiveKit) {
-        await new Promise(resolve => setTimeout(resolve, 450));
+        await new Promise(resolve => setTimeout(resolve, voiceConfig.review_delay_ms));
       }
 
       // Perform Triage Review API call
@@ -884,7 +905,7 @@
       }
       
       // Calibrate speech threshold above background noise floor
-      speechThreshold = dynamicNoiseFloor + 0.008;
+      speechThreshold = dynamicNoiseFloor + voiceConfig.speech_threshold_offset;
       interruptionThreshold = Math.max(speechThreshold * 1.5, 0.035);
       
       const currentTime = Date.now();
@@ -893,7 +914,7 @@
       if (body.classList.contains('state-speaking') && audioResponseObject) {
         if (rms > interruptionThreshold) {
           interruptionFrameCount++;
-          if (interruptionFrameCount >= 9) {
+          if (interruptionFrameCount >= voiceConfig.interruption_frames) {
             console.log("Interruption detected! RMS:", rms);
             if (audioResponseObject) {
               audioResponseObject.pause();
@@ -915,7 +936,7 @@
         
         if (rms > speechThreshold) {
           speechFrameCount++;
-          if (speechFrameCount >= 8) { // ~130ms of sustained speech
+          if (speechFrameCount >= voiceConfig.speech_frames) {
             if (!isSpeaking) {
               console.log("Speech detected!");
               isSpeaking = true;
@@ -928,19 +949,19 @@
         
         // Turn Submission Logic:
         if (isSpeaking) {
-          if (silenceElapsed > 1500) { // Increased to 1.5s for natural pause
+          if (silenceElapsed > voiceConfig.silence_ms) {
             console.log("Finished speaking. Submitting recording.");
             mediaRecorder.stop();
           }
         } else {
-          if (elapsedSinceStart > 8000) { // Increased to 8s to allow user time to start
+          if (elapsedSinceStart > voiceConfig.no_speech_timeout_ms) {
             console.log("No speech detected. Timeout, submitting empty turn.");
             mediaRecorder.stop();
           }
         }
         
         // Safety timeout - trigger turn after 25 seconds
-        if (elapsedSinceStart > 25000) { // Increased safety timeout to 25s
+        if (elapsedSinceStart > voiceConfig.safety_timeout_ms) {
           console.log("Safety timeout reached. Submitting.");
           mediaRecorder.stop();
         }
