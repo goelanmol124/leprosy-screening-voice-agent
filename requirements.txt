@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+httpx
+python-dotenv
+python-multipart
+livekit-agents[sarvam,openai,silero]
+livekit-api
+livekit-server-sdk

@@ -1,0 +1,1051 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>National Health Helpline - Voice Triage Portal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Playfair+Display:ital,wght@0,700;1,400&display=swap" rel="stylesheet">
+  
+  <!-- LiveKit Client SDK from jsDelivr -->
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
+  
+  <style>
+    :root {
+      --bg-gradient: linear-gradient(135deg, hsl(204, 100%, 96%), hsl(142, 70%, 95%));
+      --primary: #10b981;
+      --primary-glow: rgba(16, 185, 129, 0.4);
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --info: #3b82f6;
+      --text: #1f2937;
+      --glass: rgba(255, 255, 255, 0.7);
+      --border: rgba(255, 255, 255, 0.6);
+      --shadow: 0 20px 40px rgba(0, 0, 0, 0.05);
+    }
+
+    * {
+      box-sizing: border-box;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background: var(--bg-gradient);
+      background-size: 400% 400%;
+      animation: gradientShift 20s ease infinite;
+      font-family: 'Outfit', sans-serif;
+      overflow: hidden;
+      color: var(--text);
+    }
+
+    @keyframes gradientShift {
+      0% { background-position: 0% 50%; }
+      50% { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
+
+    /* Container for Microphone button */
+    .portal-container {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 10;
+    }
+
+    /* Wrapper to lock centers of visualizer canvas and mic button */
+    .mic-wrapper {
+      position: relative;
+      width: 320px;
+      height: 320px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    /* Microphone Glowing Button container */
+    .mic-outer {
+      position: relative;
+      width: 180px;
+      height: 180px;
+      border-radius: 50%;
+      background: var(--glass);
+      border: 1px solid var(--border);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+      z-index: 2;
+    }
+
+    .mic-outer::before {
+      content: '';
+      position: absolute;
+      top: -2px;
+      left: -2px;
+      right: -2px;
+      bottom: -2px;
+      border-radius: 50%;
+      border: 2px solid transparent;
+      animation: rotateRing 8s linear infinite;
+    }
+
+    .mic-button {
+      width: 130px;
+      height: 130px;
+      border-radius: 50%;
+      background: #ffffff;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.08);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      position: relative;
+      border: 1px solid var(--border);
+    }
+
+    .mic-button svg {
+      width: 50px;
+      height: 50px;
+      fill: var(--info);
+      transition: fill 0.4s ease;
+    }
+
+    /* Canvas visualizer for active voice */
+    .visualizer-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      pointer-events: none;
+      z-index: 1;
+      opacity: 0;
+      transition: opacity 0.5s ease;
+    }
+
+    /* States Styling */
+
+    /* IDLE State */
+    .state-idle .mic-outer {
+      box-shadow: 0 0 40px rgba(59, 130, 246, 0.15);
+      animation: floatSlow 4s ease-in-out infinite;
+    }
+
+    /* LISTENING State */
+    .state-listening .mic-outer {
+      box-shadow: 0 0 60px rgba(16, 185, 129, 0.4);
+      background: rgba(16, 185, 129, 0.08);
+      border-color: rgba(16, 185, 129, 0.3);
+    }
+    .state-listening .mic-button {
+      background: var(--primary);
+    }
+    .state-listening .mic-button svg {
+      fill: #ffffff;
+      animation: pulseMic 1.5s ease-in-out infinite;
+    }
+    .state-listening .visualizer-canvas {
+      opacity: 1;
+    }
+
+    /* PROCESSING State (AI thinking) */
+    .state-processing .mic-outer {
+      box-shadow: 0 0 60px rgba(245, 158, 11, 0.3);
+    }
+    .state-processing .mic-outer::before {
+      border-top-color: var(--warning);
+      border-bottom-color: var(--warning);
+      animation: rotateRing 1.5s linear infinite;
+    }
+    .state-processing .mic-button svg {
+      fill: var(--warning);
+      opacity: 0.5;
+    }
+
+    /* SPEAKING State (AI talking) */
+    .state-speaking .mic-outer {
+      box-shadow: 0 0 60px rgba(59, 130, 246, 0.3);
+      border-color: rgba(59, 130, 246, 0.3);
+      background: rgba(59, 130, 246, 0.05);
+    }
+    .state-speaking .mic-outer::before {
+      border-left-color: var(--info);
+      border-right-color: var(--info);
+      animation: rotateRing 3s linear infinite;
+    }
+    .state-speaking .mic-button svg {
+      fill: var(--info);
+      animation: speakingBob 0.6s ease-in-out infinite alternate;
+    }
+    .state-speaking .visualizer-canvas {
+      opacity: 1;
+    }
+
+    /* Status Label - subtle indicator */
+    .status-text {
+      margin-top: 30px;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      opacity: 0.4;
+      pointer-events: none;
+    }
+
+    /* Post-Call Glassmorphic Dashboard Panel */
+    .dashboard-panel {
+      position: fixed;
+      bottom: -100%;
+      left: 0;
+      width: 100vw;
+      height: 90vh;
+      background: rgba(255, 255, 255, 0.85);
+      backdrop-filter: blur(30px);
+      -webkit-backdrop-filter: blur(30px);
+      border-top: 1px solid var(--border);
+      border-radius: 40px 40px 0 0;
+      box-shadow: 0 -20px 60px rgba(0,0,0,0.1);
+      z-index: 100;
+      padding: 40px;
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+    }
+
+    .dashboard-panel.slide-up {
+      bottom: 0;
+    }
+
+    .dash-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 30px;
+      border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+      padding-bottom: 20px;
+    }
+
+    .dash-title h2 {
+      margin: 0;
+      font-family: 'Outfit', sans-serif;
+      font-weight: 800;
+      font-size: 28px;
+      color: #111827;
+      letter-spacing: -0.5px;
+    }
+
+    .dash-title p {
+      margin: 5px 0 0 0;
+      font-size: 14px;
+      color: #6b7280;
+    }
+
+    .close-dash-btn {
+      background: #111827;
+      color: #ffffff;
+      border: none;
+      padding: 12px 28px;
+      border-radius: 20px;
+      font-family: 'Outfit', sans-serif;
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+      box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+    }
+
+    .close-dash-btn:hover {
+      background: #374151;
+      transform: translateY(-2px);
+    }
+
+    .dash-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 30px;
+      flex-grow: 1;
+    }
+
+    .dash-card {
+      background: #ffffff;
+      border: 1px solid rgba(0, 0, 0, 0.03);
+      box-shadow: 0 10px 25px rgba(0,0,0,0.02);
+      border-radius: 24px;
+      padding: 30px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .dash-card h3 {
+      margin: 0 0 20px 0;
+      font-size: 18px;
+      font-weight: 600;
+      color: #374151;
+      border-left: 4px solid var(--info);
+      padding-left: 10px;
+    }
+
+    /* Triage Section Badges */
+    .triage-level {
+      display: inline-flex;
+      align-items: center;
+      padding: 10px 25px;
+      border-radius: 16px;
+      font-weight: 800;
+      font-size: 24px;
+      letter-spacing: 1px;
+      margin-bottom: 20px;
+    }
+
+    .triage-level.level-LOW {
+      background: rgba(16, 185, 129, 0.1);
+      color: var(--primary);
+    }
+
+    .triage-level.level-MEDIUM {
+      background: rgba(245, 158, 11, 0.1);
+      color: var(--warning);
+    }
+
+    .triage-level.level-HIGH {
+      background: rgba(239, 68, 68, 0.1);
+      color: var(--danger);
+    }
+
+    .triage-level.level-EMERGENCY {
+      background: rgba(239, 68, 68, 0.2);
+      color: var(--danger);
+      animation: alertPulse 1s infinite alternate;
+    }
+
+    @keyframes alertPulse {
+      0% { box-shadow: 0 0 10px rgba(239, 68, 68, 0.2); }
+      100% { box-shadow: 0 0 25px rgba(239, 68, 68, 0.6); }
+    }
+
+    .triage-reason {
+      font-size: 16px;
+      line-height: 1.6;
+      color: #4b5563;
+      margin-bottom: 30px;
+    }
+
+    .action-badge {
+      display: flex;
+      align-items: center;
+      background: #f3f4f6;
+      border-radius: 16px;
+      padding: 15px 20px;
+      font-weight: 600;
+      font-size: 15px;
+      margin-bottom: 20px;
+    }
+
+    .action-badge.dispatch-true {
+      background: rgba(239, 68, 68, 0.08);
+      color: var(--danger);
+      border: 1px dashed rgba(239, 68, 68, 0.3);
+    }
+
+    .action-badge.dispatch-false {
+      background: rgba(16, 185, 129, 0.08);
+      color: var(--primary);
+      border: 1px dashed rgba(16, 185, 129, 0.3);
+    }
+
+    .sms-box {
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 16px;
+      padding: 20px;
+      font-size: 14px;
+      color: #4b5563;
+      line-height: 1.5;
+      flex-grow: 1;
+      position: relative;
+    }
+
+    .sms-box::before {
+      content: 'PATIENT SMS PREVIEW';
+      position: absolute;
+      top: -10px;
+      left: 20px;
+      background: #ffffff;
+      padding: 2px 10px;
+      font-size: 10px;
+      font-weight: 800;
+      color: #9ca3af;
+      border-radius: 10px;
+      border: 1px solid #e5e7eb;
+    }
+
+    /* Symptoms Triage List */
+    .symptom-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      padding: 16px 0;
+      border-bottom: 1px solid #f3f4f6;
+    }
+
+    .symptom-name {
+      font-weight: 600;
+      font-size: 15px;
+      color: #374151;
+      width: 35%;
+    }
+
+    .symptom-desc {
+      font-size: 14px;
+      color: #6b7280;
+      width: 60%;
+      text-align: right;
+    }
+
+    /* Animations classes */
+    @keyframes floatSlow {
+      0% { transform: translateY(0px); }
+      50% { transform: translateY(-10px); }
+      100% { transform: translateY(0px); }
+    }
+
+    @keyframes pulseMic {
+      0% { transform: scale(1); }
+      50% { transform: scale(1.08); }
+      100% { transform: scale(1); }
+    }
+
+    @keyframes rotateRing {
+      100% { transform: rotate(360deg); }
+    }
+
+    @keyframes speakingBob {
+      0% { transform: scale(0.95); }
+      100% { transform: scale(1.05); }
+    }
+
+    /* Wave visualizer animation styling */
+    .visualizer-canvas {
+      position: absolute;
+    }
+  </style>
+</head>
+<body class="state-idle">
+
+  <div class="portal-container">
+    <div class="mic-wrapper">
+      <canvas class="visualizer-canvas" id="canvas" width="320" height="320"></canvas>
+      
+      <div class="mic-outer" id="mic-trigger">
+        <div class="mic-button">
+          <!-- SVG Microphone Icon -->
+          <svg viewBox="0 0 24 24" id="mic-icon">
+            <path d="M12,14c1.66,0,3-1.34,3-3V5c0-1.66-1.34-3-3-3S9,3.34,9,5v6C9,12.66,10.34,14,12,14z"/>
+            <path d="M17,11c0,2.76-2.24,5-5,5s-5-2.24-5-5H5c0,3.53,2.61,6.43,6,6.92V21h2v-3.08c3.39-0.49,6-3.39,6-6.92H17z"/>
+          </svg>
+        </div>
+      </div>
+    </div>
+    
+    <div class="status-text" id="status-label">Click to Start Helpline Call</div>
+  </div>
+
+  <!-- Dashboard Slide up Panel -->
+  <div class="dashboard-panel" id="dash-panel">
+    <div class="dash-header">
+      <div class="dash-title">
+        <h2>Helpline Triage Assessment</h2>
+        <p id="call-lang">Language Used: hinglish</p>
+      </div>
+      <button class="close-dash-btn" id="close-dash-btn">Done & Reset Helpline</button>
+    </div>
+    
+    <div class="dash-grid">
+      <!-- Left Panel: Diagnostics -->
+      <div class="dash-card">
+        <h3>Triage Diagnostics</h3>
+        <div>
+          <div class="triage-level" id="triage-level">HIGH RISK</div>
+        </div>
+        <p class="triage-reason" id="triage-reason">Caller reported a pale spot on arm with loss of sensation and chappal slipping repeatedly.</p>
+        
+        <div class="action-badge" id="worker-action">
+          LOCAL HEALTH WORKER DISPATCHED
+        </div>
+      </div>
+
+      <!-- Right Panel: Symptoms Summary -->
+      <div class="dash-card">
+        <h3>Reported Symptoms Summary</h3>
+        <div style="flex-grow: 1;">
+          <div class="symptom-item">
+            <span class="symptom-name">Skin Patch</span>
+            <span class="symptom-desc" id="sym-patch">Pale reddish mark on left leg</span>
+          </div>
+          <div class="symptom-item">
+            <span class="symptom-name">Sensation Loss</span>
+            <span class="symptom-desc" id="sym-numbness">Confirmed loss of heat and pinprick feel</span>
+          </div>
+          <div class="symptom-item" style="border: none;">
+            <span class="symptom-name">Nerve Weakness</span>
+            <span class="symptom-desc" id="sym-weakness">Slipper slipping off leg repeatedly</span>
+          </div>
+        </div>
+        
+        <div class="sms-box" id="sms-advice-text">
+          Reassuring text message guidance goes here...
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // State Manager
+    const body = document.body;
+    const micTrigger = document.getElementById('mic-trigger');
+    const statusLabel = document.getElementById('status-label');
+    const dashPanel = document.getElementById('dash-panel');
+    const closeDashBtn = document.getElementById('close-dash-btn');
+
+    let callActive = false;
+    let sessionId = null;
+    let audioStream = null;
+    
+    // LiveKit State
+    let useLiveKit = false;
+    let room = null;
+    
+    // REST Turn-based Fallback States
+    let mediaRecorder = null;
+    let audioChunks = [];
+    let isSpeaking = false;
+    let lastSpeakingTime = 0;
+    let lastRecordStartTime = 0;
+    let audioResponseObject = null; // Currently playing Audio element for REST
+
+    // Web Audio visualizer context & nodes
+    let audioContext = null;
+    let analyser = null; // Local Mic analyser
+    let sourceNode = null;
+    
+    // Remote Audio analyser (LiveKit Agent)
+    let remoteAnalyser = null;
+    let remoteSourceNode = null;
+    
+    let canvas = document.getElementById('canvas');
+    let ctx = canvas.getContext('2d');
+    let animationFrameId = null;
+
+    // Rolling RMS history for dynamic noise floor estimation (REST fallback)
+    let rmsHistory = [];
+    const rmsHistoryLength = 120; // ~2 seconds of history at 60fps
+    let dynamicNoiseFloor = 0.005;
+    let speechThreshold = 0.012;
+    let interruptionThreshold = 0.035;
+    let interruptionFrameCount = 0;
+    let speechFrameCount = 0;
+
+    // Click handler for microphone button
+    micTrigger.onclick = async () => {
+      if (!callActive) {
+        await startCall();
+      } else {
+        await endCall();
+      }
+    };
+
+    closeDashBtn.onclick = () => {
+      dashPanel.classList.remove('slide-up');
+      resetUI();
+    };
+
+    // State Transitions
+    function setUIState(state) {
+      body.className = '';
+      body.classList.add('state-' + state);
+      
+      switch (state) {
+        case 'idle':
+          statusLabel.innerText = "Click to Start Helpline Call";
+          break;
+        case 'listening':
+          statusLabel.innerText = "Listening...";
+          break;
+        case 'processing':
+          statusLabel.innerText = "Processing...";
+          break;
+        case 'speaking':
+          statusLabel.innerText = "AI Helpline Speaking...";
+          break;
+      }
+    }
+
+    function resetUI() {
+      callActive = false;
+      sessionId = null;
+      audioStream = null;
+      mediaRecorder = null;
+      audioChunks = [];
+      isSpeaking = false;
+      
+      if (room) {
+        room.disconnect();
+        room = null;
+      }
+      
+      if (audioResponseObject) {
+        audioResponseObject.pause();
+        audioResponseObject = null;
+      }
+      
+      // Reset VAD state variables
+      rmsHistory = [];
+      dynamicNoiseFloor = 0.005;
+      speechThreshold = 0.012;
+      interruptionThreshold = 0.035;
+      interruptionFrameCount = 0;
+      speechFrameCount = 0;
+      
+      // Clear visualizer nodes
+      if (sourceNode) sourceNode.disconnect();
+      if (remoteSourceNode) remoteSourceNode.disconnect();
+      analyser = null;
+      remoteAnalyser = null;
+      
+      setUIState('idle');
+    }
+
+    // Call Start Handler
+    async function startCall() {
+      try {
+        // Request Microphone Access first with echo cancellation & noise suppression
+        audioStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
+        callActive = true;
+        setUIState('processing');
+        
+        // Connect Web Audio context for live visualizer
+        await setupAudioVisualizer(audioStream);
+
+        // Fetch initial call greeting / token details
+        const res = await fetch('/api/start-call', { method: 'POST' });
+        const data = await res.json();
+        
+        sessionId = data.session_id;
+
+        // Upgrade automatically if LiveKit is configured on the backend
+        if (data.livekit_token && data.livekit_url) {
+          console.log("LiveKit credentials detected. Launching WebRTC Real-Time voice agent...");
+          useLiveKit = true;
+          await connectLiveKit(data.livekit_url, data.livekit_token);
+        } else {
+          console.warn("LiveKit environment variables are not fully set in .env. Gracefully falling back to REST turn-based conversational mode.");
+          useLiveKit = false;
+          playResponseAudio(data.audio);
+        }
+      } catch (err) {
+        console.error(err);
+        alert("Failed to access microphone or initialize call. Please verify permissions.");
+        resetUI();
+      }
+    }
+
+    // Connect to LiveKit Room
+    async function connectLiveKit(url, token) {
+      try {
+        room = new LivekitClient.Room({
+          adaptiveStream: true,
+          dynacast: true,
+          publishDefaults: {
+            audioPreset: 'speech'
+          }
+        });
+
+        // Event: Track Subscribed (The agent's audio arrives!)
+        room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+          if (track.kind === 'audio') {
+            console.log("Subscribed to agent's real-time audio track");
+            const element = track.attach();
+            document.body.appendChild(element);
+
+            // Connect remote agent track to visualizer
+            const stream = new MediaStream([track.mediaStreamTrack]);
+            setupRemoteAudioVisualizer(stream);
+          }
+        });
+
+        // Event: Track Unsubscribed
+        room.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
+          track.detach();
+          const el = document.getElementById(track.sid);
+          if (el) el.remove();
+        });
+
+        // Event: Active Speaker Tracking (Allows instant UI updates!)
+        room.on(LivekitClient.RoomEvent.ActiveSpeakersChanged, (speakers) => {
+          if (!callActive) return;
+          
+          const isAgentSpeaking = speakers.some(p => p.identity !== room.localParticipant.identity);
+          if (isAgentSpeaking) {
+            setUIState('speaking');
+          } else {
+            const isUserSpeaking = speakers.some(p => p.identity === room.localParticipant.identity);
+            if (isUserSpeaking) {
+              setUIState('listening');
+            }
+          }
+        });
+
+        await room.connect(url, token);
+        await room.localParticipant.setMicrophoneEnabled(true);
+        console.log("Connected to LiveKit session. Voice conversation is live!");
+        setUIState('listening');
+      } catch (err) {
+        console.error("LiveKit room connection failed. Resetting...", err);
+        resetUI();
+      }
+    }
+
+    // Call Termination and analytics review
+    async function endCall() {
+      setUIState('processing');
+      statusLabel.innerText = "Summarizing Conversation...";
+      
+      if (room) {
+        room.disconnect();
+        room = null;
+      }
+      
+      // Stop microphone streams
+      if (audioStream) {
+        audioStream.getTracks().forEach(track => track.stop());
+      }
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+      }
+      if (audioResponseObject) {
+        audioResponseObject.pause();
+        audioResponseObject = null;
+      }
+      
+      cancelAnimationFrame(animationFrameId);
+
+      // Brief delay to allow backend to finish writing LiveKit transcript file
+      if (useLiveKit) {
+        await new Promise(resolve => setTimeout(resolve, 450));
+      }
+
+      // Perform Triage Review API call
+      try {
+        const res = await fetch('/api/review', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sessionId })
+        });
+        
+        const review = await res.json();
+        displayDashboard(review);
+      } catch (err) {
+        console.error(err);
+        alert("Unable to generate analysis. Connection interrupted.");
+        resetUI();
+      }
+    }
+
+    // Setup User Audio Visualizer
+    async function setupAudioVisualizer(stream) {
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+      }
+      sourceNode = audioContext.createMediaStreamSource(stream);
+      analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      sourceNode.connect(analyser);
+      
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+      
+      const draw = () => {
+        if (!callActive) return;
+        animationFrameId = requestAnimationFrame(draw);
+        
+        // Dynamically shift visualizer source based on who is currently speaking
+        let activeAnalyser = analyser;
+        if (body.classList.contains('state-speaking') && remoteAnalyser) {
+          activeAnalyser = remoteAnalyser;
+        }
+        
+        if (!activeAnalyser) return;
+        activeAnalyser.getByteFrequencyData(dataArray);
+        
+        // Clear canvas
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Draw elegant glowing rings
+        let total = 0;
+        for (let i = 0; i < bufferLength; i++) {
+          total += dataArray[i];
+        }
+        let average = total / bufferLength;
+        let radius = 100 + (average * 0.4);
+        
+        // Draw microphone glow based on voice frequency
+        ctx.beginPath();
+        ctx.arc(canvas.width / 2, canvas.height / 2, radius, 0, 2 * Math.PI);
+        
+        let gradient = ctx.createRadialGradient(
+          canvas.width / 2, canvas.height / 2, 80,
+          canvas.width / 2, canvas.height / 2, radius
+        );
+        
+        if (body.classList.contains('state-listening')) {
+          gradient.addColorStop(0, 'rgba(16, 185, 129, 0.05)');
+          gradient.addColorStop(1, 'rgba(16, 185, 129, 0.35)');
+          ctx.strokeStyle = 'rgba(16, 185, 129, 0.5)';
+        } else if (body.classList.contains('state-speaking')) {
+          gradient.addColorStop(0, 'rgba(59, 130, 246, 0.05)');
+          gradient.addColorStop(1, 'rgba(59, 130, 246, 0.3)');
+          ctx.strokeStyle = 'rgba(59, 130, 246, 0.4)';
+        } else {
+          gradient.addColorStop(0, 'rgba(59, 130, 246, 0.02)');
+          gradient.addColorStop(1, 'rgba(59, 130, 246, 0.1)');
+          ctx.strokeStyle = 'rgba(59, 130, 246, 0.15)';
+        }
+        
+        ctx.fillStyle = gradient;
+        ctx.fill();
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      };
+      
+      draw();
+      
+      // Start the dynamic voice activity and interruption processor (Only needed in REST fallback mode)
+      rmsHistory = [];
+      runAudioProcessor();
+    }
+
+    // Setup Agent Audio Visualizer (LiveKit only)
+    function setupRemoteAudioVisualizer(stream) {
+      if (!audioContext) return;
+      
+      try {
+        remoteSourceNode = audioContext.createMediaStreamSource(stream);
+        remoteAnalyser = audioContext.createAnalyser();
+        remoteAnalyser.fftSize = 256;
+        remoteSourceNode.connect(remoteAnalyser);
+      } catch (err) {
+        console.error("Failed to setup remote audio visualizer", err);
+      }
+    }
+
+    // REST Fallback Web Audio Analyzer for Voice Activity & Interruption/Barge-in
+    function runAudioProcessor() {
+      if (!callActive || useLiveKit || !analyser) return;
+      
+      const bufferLength = analyser.fftSize;
+      const dataArray = new Float32Array(bufferLength);
+      analyser.getFloatTimeDomainData(dataArray);
+      
+      // Calculate Root Mean Square (RMS) of audio amplitude
+      let sum = 0;
+      for (let i = 0; i < bufferLength; i++) {
+        sum += dataArray[i] * dataArray[i];
+      }
+      const rms = Math.sqrt(sum / bufferLength);
+      
+      // Update rolling RMS history
+      rmsHistory.push(rms);
+      if (rmsHistory.length > rmsHistoryLength) {
+        rmsHistory.shift();
+      }
+      
+      // Compute dynamic noise floor using sorted 10th percentile
+      const sortedRms = [...rmsHistory].sort((a, b) => a - b);
+      if (sortedRms.length > 0) {
+        const index = Math.floor(sortedRms.length * 0.1);
+        dynamicNoiseFloor = sortedRms[index];
+      }
+      
+      // Calibrate speech threshold above background noise floor
+      speechThreshold = dynamicNoiseFloor + 0.008;
+      interruptionThreshold = Math.max(speechThreshold * 1.5, 0.035);
+      
+      const currentTime = Date.now();
+      
+      // 1. Barge-In / Interruption Detection
+      if (body.classList.contains('state-speaking') && audioResponseObject) {
+        if (rms > interruptionThreshold) {
+          interruptionFrameCount++;
+          if (interruptionFrameCount >= 9) {
+            console.log("Interruption detected! RMS:", rms);
+            if (audioResponseObject) {
+              audioResponseObject.pause();
+              audioResponseObject = null;
+            }
+            interruptionFrameCount = 0;
+            isSpeaking = true;
+            startRecordingTurn();
+          }
+        } else {
+          if (interruptionFrameCount > 0) interruptionFrameCount--;
+        }
+      }
+      
+      // 2. VAD Speech End & No-Speech Timeout Detection
+      if (body.classList.contains('state-listening') && mediaRecorder && mediaRecorder.state !== 'inactive') {
+        const elapsedSinceStart = currentTime - lastRecordStartTime;
+        const silenceElapsed = currentTime - lastSpeakingTime;
+        
+        if (rms > speechThreshold) {
+          speechFrameCount++;
+          if (speechFrameCount >= 8) { // ~130ms of sustained speech
+            if (!isSpeaking) {
+              console.log("Speech detected!");
+              isSpeaking = true;
+            }
+            lastSpeakingTime = currentTime;
+          }
+        } else {
+          if (speechFrameCount > 0) speechFrameCount--;
+        }
+        
+        // Turn Submission Logic:
+        if (isSpeaking) {
+          if (silenceElapsed > 1500) { // Increased to 1.5s for natural pause
+            console.log("Finished speaking. Submitting recording.");
+            mediaRecorder.stop();
+          }
+        } else {
+          if (elapsedSinceStart > 8000) { // Increased to 8s to allow user time to start
+            console.log("No speech detected. Timeout, submitting empty turn.");
+            mediaRecorder.stop();
+          }
+        }
+        
+        // Safety timeout - trigger turn after 25 seconds
+        if (elapsedSinceStart > 25000) { // Increased safety timeout to 25s
+          console.log("Safety timeout reached. Submitting.");
+          mediaRecorder.stop();
+        }
+      }
+      
+      requestAnimationFrame(runAudioProcessor);
+    }
+
+    // REST Fallback Audio Response Player
+    function playResponseAudio(base64Data) {
+      if (!base64Data) {
+        startRecordingTurn();
+        return;
+      }
+      
+      setUIState('speaking');
+      
+      audioResponseObject = new Audio("data:audio/mp3;base64," + base64Data);
+      audioResponseObject.play();
+      
+      audioResponseObject.onended = () => {
+        audioResponseObject = null;
+        startRecordingTurn();
+      };
+    }
+
+    // REST Fallback Turn Record Cycle Handler
+    function startRecordingTurn() {
+      if (!callActive || useLiveKit) return;
+      
+      setUIState('listening');
+      audioChunks = [];
+      
+      if (isSpeaking) {
+        lastSpeakingTime = Date.now();
+        speechFrameCount = 8;
+      } else {
+        isSpeaking = false;
+        lastSpeakingTime = Date.now();
+        speechFrameCount = 0;
+      }
+      lastRecordStartTime = Date.now();
+      
+      // Initialize MediaRecorder
+      mediaRecorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm' });
+      
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunks.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        if (!callActive) return;
+        
+        setUIState('processing');
+        
+        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+        const formData = new FormData();
+        formData.append('file', audioBlob, 'caller_voice.webm');
+        formData.append('session_id', sessionId);
+        
+        try {
+          const res = await fetch('/api/voice-turn', {
+            method: 'POST',
+            body: formData
+          });
+          const turnResult = await res.json();
+          playResponseAudio(turnResult.audio);
+        } catch (err) {
+          console.error(err);
+          startRecordingTurn();
+        }
+      };
+
+      mediaRecorder.start(200); // Trigger dataavailable every 200ms
+    }
+
+    // Populate and Slide in Dashboard
+    function displayDashboard(review) {
+      document.getElementById('call-lang').innerText = `Language Used: ${review.language_used}`;
+      
+      const levelEl = document.getElementById('triage-level');
+      levelEl.innerText = review.risk_assessment.level + ' RISK';
+      levelEl.className = 'triage-level level-' + review.risk_assessment.level;
+      
+      document.getElementById('triage-reason').innerText = review.risk_assessment.reason;
+      
+      const dispatchBadge = document.getElementById('worker-action');
+      if (review.action_required.send_health_worker) {
+        dispatchBadge.innerText = "LOCAL ASHA WORKER DISPATCHED IMMEDIATELY";
+        dispatchBadge.className = "action-badge dispatch-true";
+      } else {
+        dispatchBadge.innerText = "NO ASHA WORKER NEEDED - STANDBY";
+        dispatchBadge.className = "action-badge dispatch-false";
+      }
+      
+      document.getElementById('sym-patch').innerText = review.symptoms_found.skin_patch || 'None';
+      document.getElementById('sym-numbness').innerText = review.symptoms_found.numbness || 'None';
+      document.getElementById('sym-weakness').innerText = review.symptoms_found.hand_foot_weakness || 'None';
+      
+      document.getElementById('sms-advice-text').innerText = review.action_required.patient_sms_advice;
+      
+      dashPanel.classList.add('slide-up');
+    }
+  </script>
+</body>
+</html>
