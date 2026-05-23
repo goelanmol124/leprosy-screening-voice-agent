@@ -1,0 +1,11 @@
+.dockerignore
+.git
+.gitignore
+.env
+.venv
+venv
+__pycache__
+*.pyc
+sessions
+transcripts
+terminals
