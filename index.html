@@ -203,6 +203,24 @@
       pointer-events: none;
     }
 
+    .portal-actions {
+      margin-top: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+
+    #retry-review-btn {
+      background: var(--warning);
+      color: #ffffff;
+      display: none;
+    }
+
+    #retry-review-btn:hover {
+      filter: brightness(1.05);
+    }
+
     /* Post-Call Glassmorphic Dashboard Panel */
     .dashboard-panel {
       position: fixed;
@@ -458,6 +476,9 @@
     </div>
     
     <div class="status-text" id="status-label">Click to Start Helpline Call</div>
+    <div class="portal-actions">
+      <button type="button" class="close-dash-btn" id="retry-review-btn">Retry summary</button>
+    </div>
   </div>
 
   <!-- Dashboard Slide up Panel -->
@@ -516,9 +537,12 @@
     const statusLabel = document.getElementById('status-label');
     const dashPanel = document.getElementById('dash-panel');
     const closeDashBtn = document.getElementById('close-dash-btn');
+    const retryReviewBtn = document.getElementById('retry-review-btn');
 
     let callActive = false;
     let sessionId = null;
+    let voiceMode = 'rest';
+    let restGreetingAudio = '';
     let audioStream = null;
     
     // LiveKit State
@@ -545,6 +569,14 @@
     let canvas = document.getElementById('canvas');
     let ctx = canvas.getContext('2d');
     let animationFrameId = null;
+    let vadAnimationFrameId = null;
+    let liveKitFallbackTimer = null;
+    let liveKitJoinTimer = null;
+    let liveKitAgentAudioReceived = false;
+    let liveKitAgentHasSpoken = false;
+    let liveKitFallbackAudio = '';
+    let recordingMimeType = 'audio/webm';
+    let recordingFilename = 'caller_voice.webm';
 
     // Rolling RMS history for dynamic noise floor estimation (REST fallback)
     let rmsHistory = [];
@@ -575,6 +607,98 @@
       }
     }
 
+    function clearLiveKitFallbackTimer() {
+      if (liveKitFallbackTimer !== null) {
+        clearTimeout(liveKitFallbackTimer);
+        liveKitFallbackTimer = null;
+      }
+    }
+
+    function clearLiveKitJoinTimer() {
+      if (liveKitJoinTimer !== null) {
+        clearTimeout(liveKitJoinTimer);
+        liveKitJoinTimer = null;
+      }
+    }
+
+    function fallbackToRestMode(reason, fallbackAudioBase64) {
+      if (!callActive || !useLiveKit) return;
+      console.warn('LiveKit fallback to REST:', reason);
+      clearLiveKitFallbackTimer();
+      clearLiveKitJoinTimer();
+      liveKitAgentAudioReceived = false;
+      liveKitAgentHasSpoken = false;
+      if (room) {
+        room.disconnect();
+        room = null;
+      }
+      useLiveKit = false;
+      voiceMode = 'rest';
+      ensureRestAudioProcessorRunning();
+      playResponseAudio(fallbackAudioBase64);
+    }
+
+    async function publishMicToRoom() {
+      const mediaTrack = audioStream && audioStream.getAudioTracks()[0];
+      if (!mediaTrack) {
+        await room.localParticipant.setMicrophoneEnabled(true);
+        return;
+      }
+      try {
+        const localTrack = new LivekitClient.LocalAudioTrack(
+          mediaTrack,
+          undefined,
+          'microphone'
+        );
+        await room.localParticipant.publishTrack(localTrack, {
+          source: LivekitClient.Track.Source.Microphone,
+        });
+        console.log('Published existing microphone track to LiveKit room.');
+      } catch (err) {
+        console.warn('Could not publish existing mic track; using LiveKit default capture.', err);
+        await room.localParticipant.setMicrophoneEnabled(true);
+      }
+    }
+
+    function cancelVadProcessor() {
+      if (vadAnimationFrameId !== null) {
+        cancelAnimationFrame(vadAnimationFrameId);
+        vadAnimationFrameId = null;
+      }
+    }
+
+    function ensureRestAudioProcessorRunning() {
+      if (!callActive || useLiveKit || !analyser) return;
+      if (vadAnimationFrameId !== null) return;
+      runAudioProcessor();
+    }
+
+    async function submitReviewSummary() {
+      if (!sessionId) return;
+      setUIState('processing');
+      statusLabel.innerText = 'Summarizing Conversation...';
+      retryReviewBtn.style.display = 'none';
+      try {
+        const res = await fetch('/api/review', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sessionId, voice_mode: voiceMode })
+        });
+        const review = await res.json();
+        if (review.error) {
+          throw new Error(review.error);
+        }
+        displayDashboard(review);
+        statusLabel.innerText = 'Click to Start Helpline Call';
+        setUIState('idle');
+      } catch (err) {
+        console.error(err);
+        retryReviewBtn.style.display = 'block';
+        statusLabel.innerText = 'Could not generate summary — tap Retry.';
+        setUIState('idle');
+      }
+    }
+
     // Click handler for microphone button
     micTrigger.onclick = async () => {
       if (!callActive) {
@@ -588,6 +712,8 @@
       dashPanel.classList.remove('slide-up');
       resetUI();
     };
+
+    retryReviewBtn.onclick = () => submitReviewSummary();
 
     // State Transitions
     function setUIState(state) {
@@ -612,11 +738,27 @@
 
     function resetUI() {
       callActive = false;
+      voiceMode = 'rest';
+      restGreetingAudio = '';
       sessionId = null;
       audioStream = null;
       mediaRecorder = null;
       audioChunks = [];
       isSpeaking = false;
+      liveKitAgentAudioReceived = false;
+      liveKitAgentHasSpoken = false;
+      liveKitFallbackAudio = '';
+      
+      retryReviewBtn.style.display = 'none';
+
+      clearLiveKitFallbackTimer();
+      clearLiveKitJoinTimer();
+      cancelVadProcessor();
+      
+      if (animationFrameId !== null) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = null;
+      }
       
       if (room) {
         room.disconnect();
@@ -668,26 +810,36 @@
         const data = await res.json();
         
         sessionId = data.session_id;
+        voiceMode = data.voice_mode || 'rest';
+        restGreetingAudio = data.audio || '';
 
-        // Upgrade automatically if LiveKit is configured on the backend
-        if (data.livekit_token && data.livekit_url) {
-          console.log("LiveKit credentials detected. Launching WebRTC Real-Time voice agent...");
+        if (voiceMode === 'livekit' && data.livekit_token && data.livekit_url) {
+          console.log('LiveKit voice mode: connecting to real-time agent…');
           useLiveKit = true;
-          await connectLiveKit(data.livekit_url, data.livekit_token);
+          await connectLiveKit(data.livekit_url, data.livekit_token, restGreetingAudio);
         } else {
-          console.warn("LiveKit environment variables are not fully set in .env. Gracefully falling back to REST turn-based conversational mode.");
+          console.warn('REST turn-based mode (no LiveKit or dispatch unavailable).');
           useLiveKit = false;
-          playResponseAudio(data.audio);
+          voiceMode = 'rest';
+          playResponseAudio(restGreetingAudio);
         }
       } catch (err) {
         console.error(err);
-        alert("Failed to access microphone or initialize call. Please verify permissions.");
         resetUI();
+        statusLabel.innerText = 'Microphone or call setup failed — allow mic and try again.';
       }
     }
 
-    // Connect to LiveKit Room
-    async function connectLiveKit(url, token) {
+    // Connect to LiveKit Room (falls back to REST if no agent audio within timeout)
+    async function connectLiveKit(url, token, fallbackAudioBase64) {
+      clearLiveKitFallbackTimer();
+      clearLiveKitJoinTimer();
+      liveKitAgentAudioReceived = false;
+      liveKitAgentHasSpoken = false;
+      liveKitFallbackAudio = fallbackAudioBase64 || '';
+      setUIState('processing');
+      statusLabel.innerText = 'Connecting to helpline agent...';
+
       try {
         room = new LivekitClient.Room({
           adaptiveStream: true,
@@ -697,64 +849,111 @@
           }
         });
 
-        // Event: Track Subscribed (The agent's audio arrives!)
         room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
-          if (track.kind === 'audio') {
-            console.log("Subscribed to agent's real-time audio track");
-            const element = track.attach();
-            document.body.appendChild(element);
+          if (track.kind !== 'audio' || !participant) return;
+          if (!room || participant.identity === room.localParticipant.identity) return;
 
-            // Connect remote agent track to visualizer
-            const stream = new MediaStream([track.mediaStreamTrack]);
-            setupRemoteAudioVisualizer(stream);
-          }
+          liveKitAgentAudioReceived = true;
+          clearLiveKitFallbackTimer();
+          clearLiveKitJoinTimer();
+
+          console.log('Subscribed to agent audio track');
+          const element = track.attach();
+          element.id = track.sid;
+          document.body.appendChild(element);
+
+          const stream = new MediaStream([track.mediaStreamTrack]);
+          setupRemoteAudioVisualizer(stream);
         });
 
-        // Event: Track Unsubscribed
         room.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
           track.detach();
           const el = document.getElementById(track.sid);
           if (el) el.remove();
         });
 
-        // Event: Active Speaker Tracking (Allows instant UI updates!)
+        room.on(LivekitClient.RoomEvent.ParticipantConnected, (participant) => {
+          if (!participant || participant.identity === room.localParticipant.identity) return;
+          console.log('LiveKit agent participant joined:', participant.identity);
+        });
+
         room.on(LivekitClient.RoomEvent.ActiveSpeakersChanged, (speakers) => {
-          if (!callActive) return;
-          
-          const isAgentSpeaking = speakers.some(p => p.identity !== room.localParticipant.identity);
+          if (!callActive || !useLiveKit || !room) return;
+
+          const isAgentSpeaking = speakers.some(
+            (p) => p.identity !== room.localParticipant.identity
+          );
           if (isAgentSpeaking) {
+            liveKitAgentHasSpoken = true;
             setUIState('speaking');
+            return;
+          }
+
+          const isUserSpeaking = speakers.some(
+            (p) => p.identity === room.localParticipant.identity
+          );
+          if (isUserSpeaking && liveKitAgentHasSpoken) {
+            setUIState('listening');
+          } else if (liveKitAgentHasSpoken) {
+            setUIState('listening');
           } else {
-            const isUserSpeaking = speakers.some(p => p.identity === room.localParticipant.identity);
-            if (isUserSpeaking) {
-              setUIState('listening');
-            }
+            setUIState('processing');
+            statusLabel.innerText = 'Waiting for helpline agent...';
           }
         });
 
         await room.connect(url, token);
-        await room.localParticipant.setMicrophoneEnabled(true);
-        console.log("Connected to LiveKit session. Voice conversation is live!");
-        setUIState('listening');
+        await publishMicToRoom();
+        console.log('Connected to LiveKit session.');
+        setUIState('processing');
+        statusLabel.innerText = 'Waiting for helpline agent...';
+
+        liveKitJoinTimer = setTimeout(() => {
+          if (!callActive || !useLiveKit || liveKitAgentAudioReceived) return;
+          const hasRemoteParticipant = room && room.remoteParticipants.size > 0;
+          if (!hasRemoteParticipant) {
+            fallbackToRestMode('no agent joined the room', liveKitFallbackAudio);
+          }
+        }, 8000);
+
+        liveKitFallbackTimer = setTimeout(() => {
+          if (!callActive || !useLiveKit || liveKitAgentAudioReceived) return;
+          fallbackToRestMode('no agent audio track received', liveKitFallbackAudio);
+        }, 12000);
       } catch (err) {
-        console.error("LiveKit room connection failed. Resetting...", err);
-        resetUI();
+        console.error('LiveKit connection failed; using REST.', err);
+        clearLiveKitFallbackTimer();
+        clearLiveKitJoinTimer();
+        useLiveKit = false;
+        voiceMode = 'rest';
+        room = null;
+        ensureRestAudioProcessorRunning();
+        playResponseAudio(fallbackAudioBase64);
       }
     }
 
-    // Call Termination and analytics review
     async function endCall() {
       setUIState('processing');
-      statusLabel.innerText = "Summarizing Conversation...";
-      
+      statusLabel.innerText = 'Summarizing Conversation...';
+
+      clearLiveKitFallbackTimer();
+      clearLiveKitJoinTimer();
+      cancelVadProcessor();
+
+      if (animationFrameId !== null) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = null;
+      }
+
+      callActive = false;
+
       if (room) {
         room.disconnect();
         room = null;
       }
-      
-      // Stop microphone streams
+
       if (audioStream) {
-        audioStream.getTracks().forEach(track => track.stop());
+        audioStream.getTracks().forEach((track) => track.stop());
       }
       if (mediaRecorder && mediaRecorder.state !== 'inactive') {
         mediaRecorder.stop();
@@ -763,29 +962,12 @@
         audioResponseObject.pause();
         audioResponseObject = null;
       }
-      
-      cancelAnimationFrame(animationFrameId);
 
-      // Brief delay to allow backend to finish writing LiveKit transcript file
-      if (useLiveKit) {
-        await new Promise(resolve => setTimeout(resolve, voiceConfig.review_delay_ms));
+      if (voiceMode === 'livekit') {
+        await new Promise((resolve) => setTimeout(resolve, voiceConfig.review_delay_ms));
       }
 
-      // Perform Triage Review API call
-      try {
-        const res = await fetch('/api/review', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session_id: sessionId })
-        });
-        
-        const review = await res.json();
-        displayDashboard(review);
-      } catch (err) {
-        console.error(err);
-        alert("Unable to generate analysis. Connection interrupted.");
-        resetUI();
-      }
+      await submitReviewSummary();
     }
 
     // Setup User Audio Visualizer
@@ -878,8 +1060,11 @@
 
     // REST Fallback Web Audio Analyzer for Voice Activity & Interruption/Barge-in
     function runAudioProcessor() {
-      if (!callActive || useLiveKit || !analyser) return;
-      
+      if (!callActive || useLiveKit || !analyser) {
+        vadAnimationFrameId = null;
+        return;
+      }
+
       const bufferLength = analyser.fftSize;
       const dataArray = new Float32Array(bufferLength);
       analyser.getFloatTimeDomainData(dataArray);
@@ -967,7 +1152,7 @@
         }
       }
       
-      requestAnimationFrame(runAudioProcessor);
+      vadAnimationFrameId = requestAnimationFrame(runAudioProcessor);
     }
 
     // REST Fallback Audio Response Player
@@ -1004,9 +1189,19 @@
         speechFrameCount = 0;
       }
       lastRecordStartTime = Date.now();
-      
-      // Initialize MediaRecorder
-      mediaRecorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm' });
+
+      const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/mp4;codecs=mp4a.40.2'];
+      recordingMimeType = candidates.find((t) => MediaRecorder.isTypeSupported(t)) || '';
+      if (recordingMimeType.includes('mp4')) {
+        recordingFilename = 'caller_voice.m4a';
+      } else {
+        recordingFilename = 'caller_voice.webm';
+      }
+
+      const recorderOpts = recordingMimeType ? { mimeType: recordingMimeType } : undefined;
+      mediaRecorder = recorderOpts
+        ? new MediaRecorder(audioStream, recorderOpts)
+        : new MediaRecorder(audioStream);
       
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
@@ -1019,9 +1214,10 @@
         
         setUIState('processing');
         
-        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+        const blobType = recordingMimeType || 'audio/webm';
+        const audioBlob = new Blob(audioChunks, { type: blobType });
         const formData = new FormData();
-        formData.append('file', audioBlob, 'caller_voice.webm');
+        formData.append('file', audioBlob, recordingFilename || 'caller_voice.webm');
         formData.append('session_id', sessionId);
         
         try {
@@ -1042,6 +1238,12 @@
 
     // Populate and Slide in Dashboard
     function displayDashboard(review) {
+      if (!review || !review.risk_assessment || !review.symptoms_found || !review.action_required) {
+        console.error('Invalid review payload', review);
+        retryReviewBtn.style.display = 'block';
+        statusLabel.innerText = 'Summary data was incomplete — tap Retry.';
+        return;
+      }
       document.getElementById('call-lang').innerText = `Language Used: ${review.language_used}`;
       
       const levelEl = document.getElementById('triage-level');

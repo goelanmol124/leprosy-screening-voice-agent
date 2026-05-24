@@ -8,7 +8,7 @@ def detect_language_code(text: str) -> str:
     devanagari = sum(1 for char in text if "\u0900" <= char <= "\u097F")
     latin = sum(1 for char in text if char.isascii() and char.isalpha())
 
-    if latin > devanagari * 1.5 and latin >= 8:
+    if latin > devanagari * 1.5 and latin >= 4:
         return "en-IN"
     return "hi-IN"
 

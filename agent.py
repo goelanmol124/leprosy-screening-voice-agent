@@ -126,7 +126,7 @@ async def entrypoint(ctx: JobContext):
         logger.info("Session closed for room %s", room_name)
         try:
             messages = []
-            for item in session.chat_ctx.messages():
+            for item in session.history.messages():
                 text = item.text_content
                 if text:
                     messages.append({"role": item.role, "content": text})
