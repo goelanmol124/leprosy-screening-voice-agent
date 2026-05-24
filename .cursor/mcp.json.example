@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "vapi-docs": {
+      "command": "npx",
+      "args": ["-y", "@vapi-ai/mcp-server"],
+      "env": {
+        "VAPI_TOKEN": "your-vapi-private-api-key"
+      }
+    }
+  }
+}
