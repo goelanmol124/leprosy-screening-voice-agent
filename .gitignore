@@ -16,3 +16,17 @@ transcripts/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Secrets, caches and build artefacts
+.env.*
+!.env.example
+.dev.vars
+*.pem
+credentials*.json
+token*.json
+.pytest_cache/
+node_modules/
+venv/
+dist/
+.wrangler/
+*.log

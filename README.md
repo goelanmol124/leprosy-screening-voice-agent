@@ -1,9 +1,16 @@
-# Leprosy Helpline (Vapi + Sarvam)
+# Leprosy Screening Voice Helpline (Vapi + Sarvam)
 
-- **Vapi** — live voice conversation (STT, LLM, TTS)
-- **Sarvam** — post-call transcript analysis and risk summary
+A Hindi/English/Hinglish **voice AI helpline** that talks to callers about skin patches and nerve symptoms, gently screens for early signs of **leprosy (Hansen's disease)**, and nudges people towards free treatment at government health centres. After the call, an LLM reviews the transcript and produces a structured **risk summary** for a health worker.
 
-Previous Sarvam/LiveKit version is tagged `v1`.
+- **Vapi**: live voice conversation (speech-to-text, LLM, text-to-speech) in the browser
+- **Sarvam** (`sarvam-m`): post-call transcript analysis and risk summary
+- **FastAPI** backend + a single-page dashboard (`index.html`)
+
+Why: leprosy is fully curable, but stigma and late detection cause disability. A friendly, low-barrier voice line in the caller's own language can surface early symptoms (numb patches, painless injuries, nerve weakness) and route people to care.
+
+> **Disclaimer:** this is a research prototype and **not a medical device**. It does not diagnose. The risk summary is a triage aid for trained health workers. The project is not affiliated with any government health programme or helpline.
+
+The earlier Sarvam + LiveKit version is tagged `v1`.
 
 ## Setup
 
